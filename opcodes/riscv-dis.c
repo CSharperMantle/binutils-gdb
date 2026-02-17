@@ -58,6 +58,9 @@ struct riscv_private_data
   /* Default architecture string for the object file.  It will be changed once
      elf architecture attribute exits.  This is used for mapping symbol $x.  */
   const char* default_arch;
+  /* If set (by -M arch=), overrides default_arch for disassembly.  Useful for
+     objects without .riscv.attributes. */
+  char *arch_override;
   /* Used for mapping symbols.  */
   int last_map_symbol;
   bfd_vma last_stop_offset;
@@ -73,6 +76,9 @@ struct riscv_private_data
      we did at the beginning.  */
   bool all_ext;
 };
+
+static void
+riscv_dis_parse_subset (struct disassemble_info *info, const char *arch_new);
 
 /* Set default RISC-V disassembler options.  */
 
@@ -155,6 +161,13 @@ parse_riscv_dis_option (const char *option, struct disassemble_info *info)
 				   "the elf privilege attribute is %s"),
 				 option, value, name);
 	}
+    }
+  else if (strcmp (option, "arch") == 0)
+    {
+      struct riscv_private_data *pd = info->private_data;
+      free (pd->arch_override);
+      pd->arch_override = xstrdup (value);
+      riscv_dis_parse_subset (info, pd->arch_override);
     }
   else
     {
@@ -1132,7 +1145,9 @@ riscv_update_map_state (int n,
   else if (strcmp (name, "$x") == 0)
     {
       *state = MAP_INSN;
-      riscv_dis_parse_subset (info, pd->default_arch);
+      riscv_dis_parse_subset(info, pd->arch_override != NULL
+                                       ? pd->arch_override
+                                       : pd->default_arch);
     }
   else if (strncmp (name, "$xrv", 4) == 0)
     {
@@ -1445,6 +1460,7 @@ riscv_init_disasm_info (struct disassemble_info *info)
   pd->riscv_rps_dis.isa_spec = &pd->default_isa_spec;
   pd->riscv_rps_dis.check_unknown_prefixed_ext = false;
   pd->default_arch = "rv64gc";
+  pd->arch_override = NULL;
   if (info->section != NULL)
     {
       bfd *abfd = info->section->owner;
@@ -1606,6 +1622,7 @@ typedef enum
 {
   RISCV_OPTION_ARG_NONE = -1,
   RISCV_OPTION_ARG_PRIV_SPEC,
+  RISCV_OPTION_ARG_ARCH,
 
   RISCV_OPTION_ARG_COUNT
 } riscv_option_arg_t;
@@ -1630,7 +1647,10 @@ static const struct
     RISCV_OPTION_ARG_NONE },
   { "priv-spec=",
     N_("Print the CSR according to the chosen privilege spec."),
-    RISCV_OPTION_ARG_PRIV_SPEC }
+    RISCV_OPTION_ARG_PRIV_SPEC },
+  { "arch=",
+    N_("Use the given ISA string for disassembly."),
+    RISCV_OPTION_ARG_ARCH }
 };
 
 /* Build the structure representing valid RISCV disassembler options.
@@ -1661,6 +1681,8 @@ disassembler_options_riscv (void)
 	  = riscv_priv_specs[PRIV_SPEC_EARLIEST - PRIV_SPEC_CLASS_NONE - 1 + i].name;
       /* The array we return must be NULL terminated.  */
       args[RISCV_OPTION_ARG_PRIV_SPEC].values[i] = NULL;
+      args[RISCV_OPTION_ARG_ARCH].name = "ISA";
+      args[RISCV_OPTION_ARG_ARCH].values = NULL;
 
       /* The array we return must be NULL terminated.  */
       args[num_args].name = NULL;
@@ -1758,6 +1780,7 @@ void disassemble_free_riscv (struct disassemble_info *info ATTRIBUTE_UNUSED)
   struct riscv_private_data *pd = info->private_data;
   if (pd)
     {
+      free (pd->arch_override);
       riscv_release_subset_list (pd->riscv_rps_dis.subset_list);
       free (pd->riscv_rps_dis.subset_list);
     }
